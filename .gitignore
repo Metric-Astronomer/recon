@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
+.venv/
+
+# Test/output files (don't commit these — they're generated each run)
+test_invoice_jan26.csv
+test_order_report.csv
+reconciliation_*.xlsx
+
+# Mac junk
+.DS_Store
+
+# Streamlit local credentials only (config.toml is needed for cloud)
+.streamlit/credentials.toml

@@ -76,8 +76,8 @@ st.markdown("""
 # ─────────────────────────────────────────────────────────────────────────────
 
 @st.cache_resource(show_spinner=False)
-def get_rates():
-    return load_commercial_rates(DEFAULT_RATES_FILE, "Commercial")
+def get_rates(rate_card_path: str):
+    return load_commercial_rates(rate_card_path, "Commercial")
 
 @st.cache_resource(show_spinner=False)
 def get_product_weights():
@@ -101,7 +101,7 @@ st.markdown("<p style='text-align:center; margin-bottom:1.5rem;'>Upload your mon
 # ─────────────────────────────────────────────────────────────────────────────
 
 with st.spinner("Loading rate card and product weights (first time only)..."):
-    rates           = get_rates()
+    default_rates   = get_rates(DEFAULT_RATES_FILE)
     product_weights = get_product_weights()
 
 st.divider()
@@ -156,10 +156,30 @@ if order_file:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP 3 — MONTH
+# STEP 3 — RATE CARD (OPTIONAL OVERRIDE)
 # ─────────────────────────────────────────────────────────────────────────────
 
-st.subheader("Step 3 — Which month?")
+st.subheader("Step 3 — Upload Updated Rate Card (optional)")
+st.caption("If your commercial rates changed, upload the latest Excel here. If not uploaded, the default bundled rate card is used.")
+
+rate_card_file = st.file_uploader(
+    label="Updated Commercial Rate Card (.xlsx)",
+    type=["xlsx", "xlsm", "xls"],
+    accept_multiple_files=False,
+    label_visibility="collapsed",
+)
+
+if rate_card_file:
+    st.success(f"✓ Updated rate card uploaded — {rate_card_file.name}")
+else:
+    st.info(f"Using default rate card: {os.path.basename(DEFAULT_RATES_FILE)}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 4 — MONTH
+# ─────────────────────────────────────────────────────────────────────────────
+
+st.subheader("Step 4 — Which month?")
 
 col_month, col_year = st.columns(2)
 with col_month:
@@ -201,6 +221,17 @@ if run_clicked and invoice_files:
     progress_bar = st.progress(0, text="Loading invoice files...")
 
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Decide rate card for this run
+        if rate_card_file:
+            rate_card_path = os.path.join(tmpdir, rate_card_file.name)
+            with open(rate_card_path, "wb") as out:
+                out.write(rate_card_file.read())
+            # Cache key is file path string, so new uploads load separately.
+            rates = get_rates(rate_card_path)
+            selected_rate_card_name = rate_card_file.name
+        else:
+            rates = default_rates
+            selected_rate_card_name = os.path.basename(DEFAULT_RATES_FILE)
 
         # Save invoice CSVs
         csv_paths = []
@@ -253,6 +284,7 @@ if run_clicked and invoice_files:
 
     st.divider()
     st.subheader(f"Results — {month_label}")
+    st.caption(f"Rate card used: `{selected_rate_card_name}`")
 
     remark_counts  = result_df["Remarks"].value_counts().to_dict()
     matched        = remark_counts.get("Matched", 0)
@@ -346,8 +378,8 @@ if run_clicked and invoice_files:
 with st.expander("ℹ️  How to update the rate card or add new products"):
     st.markdown("""
 **Rate card changed?** (Spaceship sends a new commercial rate sheet)
-1. Replace the `Commercial` sheet in the master Excel file in the Finance Automation folder
-2. Restart the app
+1. Upload the latest rate card in **Step 3** (`.xlsx`)
+2. Run reconciliation — no restart needed
 
 **New SKU launched?**
 1. Add the SKU + actual weight (kg) to the `Product LBH Master` sheet in the master Excel

@@ -549,7 +549,7 @@ def reconcile(df: pd.DataFrame, rates: dict, product_weights: dict) -> pd.DataFr
     tracking_counts = df["tracking_number"].value_counts()
     duplicates = set(tracking_counts[tracking_counts > 1].index)
 
-    matched = rate_diff = weight_diff = no_rate = dupe = 0
+    matched = rate_diff = weight_diff = fsc_diff = no_rate = dupe = 0
     TOLERANCE = 0.02  # HKD — rounding tolerance (< 2 cents is not a real diff)
 
     for idx, row in df.iterrows():
@@ -596,6 +596,7 @@ def reconcile(df: pd.DataFrame, rates: dict, product_weights: dict) -> pd.DataFr
         # ── STEP 4 & 5: Compare and classify ────────────────────────────────
         # Flag B2B / bulk shipments: large weight + SKU not in product master
         is_bulk_b2b = (not product_weight_kg) and (sp_final_weight > 30)
+        fsc_pct = None
 
         if lookup_result is None:
             remarks = "No Rate"
@@ -621,6 +622,8 @@ def reconcile(df: pd.DataFrame, rates: dict, product_weights: dict) -> pd.DataFr
             # → only flag overcharges, accept undercharges (discounts) silently
             exp_freight = min(sp_freight, rate_freight)
             exp_fuel    = min(sp_fuel, rate_fuel)
+            fuel_diff_val = round(sp_fuel - exp_fuel, 4)
+            fsc_pct = round((sp_fuel / sp_total) * 100, 4) if sp_total > 0 else 0.0
 
             # Expected total: use our expected freight+fuel, keep all other charges as-is
             # (pass-through surcharges: seasonal, residential, remote, tariff, etc.)
@@ -633,6 +636,15 @@ def reconcile(df: pd.DataFrame, rates: dict, product_weights: dict) -> pd.DataFr
             )
 
             charges_diff = round(sp_total - noise_total, 4)
+            # Keep a "non-fuel only" diff so fuel volatility can be handled by policy.
+            non_fuel_expected_total = round(
+                exp_freight + sp_fuel
+                + sp_seasonal + sp_residential + sp_remote
+                + sp_tariff + sp_addr_corr + sp_dt_handling
+                + sp_addl_handling + sp_us_inbound,
+                4
+            )
+            non_fuel_diff = round(sp_total - non_fuel_expected_total, 4)
 
             # Weight diff check:
             # AT = CEILING(Noise_Weight_KG, 0.5) - CEILING(SP_Final_Weight, 0.5)
@@ -646,11 +658,18 @@ def reconcile(df: pd.DataFrame, rates: dict, product_weights: dict) -> pd.DataFr
             if is_dup:
                 remarks = "Duplicate"
                 dupe += 1
-            elif abs(charges_diff) <= TOLERANCE:
-                # Charges match → Matched, regardless of weight tier difference
-                # (Spaceship may state a different weight but we still got the same price)
+            elif abs(non_fuel_diff) <= TOLERANCE and abs(fuel_diff_val) <= TOLERANCE:
                 remarks = "Matched"
                 matched += 1
+            elif abs(non_fuel_diff) <= TOLERANCE and fsc_pct <= 30:
+                # Finance rule: if only fuel differs and fuel share is <= 30%,
+                # treat as reconciled.
+                remarks = "Matched"
+                matched += 1
+            elif abs(non_fuel_diff) <= TOLERANCE and fsc_pct > 30 and abs(fuel_diff_val) > TOLERANCE:
+                # Finance rule: high fuel share with fuel mismatch is a dedicated class.
+                remarks = "FSC Difference"
+                fsc_diff += 1
             elif abs(weight_diff_val) > 0.01:
                 # Charges differ AND weight tier is wrong → Weight Diff
                 # This means Spaceship scanned a much higher weight than the product is
@@ -695,6 +714,7 @@ def reconcile(df: pd.DataFrame, rates: dict, product_weights: dict) -> pd.DataFr
             "Weight Diff (kg)":       weight_diff_val,
             "Freight Diff":           round(sp_freight - exp_freight, 4) if exp_freight is not None else None,
             "Fuel Diff":              round(sp_fuel - exp_fuel, 4) if exp_fuel is not None else None,
+            "FSC % of SP Total":      fsc_pct,
             "Remarks":                remarks,
         }
         results.append(result)
@@ -705,6 +725,7 @@ def reconcile(df: pd.DataFrame, rates: dict, product_weights: dict) -> pd.DataFr
     print(f"  Matched      : {matched:,} rows  (everything correct)")
     print(f"  Rate Diff    : {rate_diff:,} rows  (wrong price, same weight)")
     print(f"  Weight Diff  : {weight_diff:,} rows  (wrong weight charged)")
+    print(f"  FSC Difference: {fsc_diff:,} rows  (fuel > 30% of SP total and fuel mismatch)")
     print(f"  No Rate      : {no_rate:,} rows  (route not in rate table)")
     print(f"  Duplicate    : {dupe:,} rows  (same tracking appears twice)")
     print(f"  Total        : {len(result_df):,} rows")
@@ -750,6 +771,7 @@ REMARK_COLORS = {
     "Matched":     COLORS["matched"],
     "Rate Diff":   COLORS["rate_diff"],
     "Weight Diff": COLORS["weight_diff"],
+    "FSC Difference": "D9E1F2",  # Light blue
     "No Rate":     COLORS["no_rate"],
     "Duplicate":   COLORS["duplicate"],
 }

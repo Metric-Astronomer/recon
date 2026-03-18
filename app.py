@@ -6,10 +6,13 @@ TO START: streamlit run app.py
 
 import os
 import tempfile
+import io
+import csv
 from datetime import datetime
 
 import streamlit as st
 import pandas as pd
+import openpyxl
 
 from reconcile import (
     load_commercial_rates,
@@ -82,6 +85,56 @@ def get_rates(rate_card_path: str):
 @st.cache_resource(show_spinner=False)
 def get_product_weights():
     return load_product_weights(DEFAULT_PRODUCT_FILE, "Product LBH Master")
+
+
+def normalize_uploaded_commercial_sheet(uploaded_file, tmpdir: str) -> str:
+    """
+    Convert an uploaded Commercial sheet (Excel or CSV) into a temporary
+    workbook that always has one sheet named 'Commercial'.
+    """
+    filename = uploaded_file.name or "uploaded_rate_card"
+    ext = os.path.splitext(filename)[1].lower()
+    output_path = os.path.join(tmpdir, "uploaded_commercial_normalized.xlsx")
+
+    if ext in (".xlsx", ".xlsm"):
+        in_wb = openpyxl.load_workbook(
+            io.BytesIO(uploaded_file.getvalue()),
+            read_only=True,
+            data_only=True,
+        )
+        source_ws = in_wb["Commercial"] if "Commercial" in in_wb.sheetnames else in_wb[in_wb.sheetnames[0]]
+
+        out_wb = openpyxl.Workbook()
+        out_ws = out_wb.active
+        out_ws.title = "Commercial"
+
+        for r_idx, row in enumerate(source_ws.iter_rows(values_only=True), start=1):
+            for c_idx, value in enumerate(row, start=1):
+                out_ws.cell(r_idx, c_idx, value)
+
+        out_wb.save(output_path)
+        in_wb.close()
+        return output_path
+
+    if ext == ".csv":
+        text = uploaded_file.getvalue().decode("utf-8-sig", errors="replace")
+        reader = csv.reader(io.StringIO(text))
+
+        out_wb = openpyxl.Workbook()
+        out_ws = out_wb.active
+        out_ws.title = "Commercial"
+
+        # Keep row 1 blank so the parser behavior matches the original workbook style.
+        out_row = 2
+        for row in reader:
+            for c_idx, value in enumerate(row, start=1):
+                out_ws.cell(out_row, c_idx, value)
+            out_row += 1
+
+        out_wb.save(output_path)
+        return output_path
+
+    raise ValueError("Step 3 supports only .xlsx, .xlsm, or .csv files for the Commercial sheet.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -160,11 +213,11 @@ if order_file:
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.subheader("Step 3 — Upload Updated Rate Card (optional)")
-st.caption("If your commercial rates changed, upload the latest Excel here. If not uploaded, the default bundled rate card is used.")
+st.caption("Upload only the updated Commercial sheet (Excel/CSV). If not uploaded, the default bundled rate card is used.")
 
 rate_card_file = st.file_uploader(
-    label="Updated Commercial Rate Card (.xlsx)",
-    type=["xlsx", "xlsm", "xls"],
+    label="Updated Commercial Sheet (.xlsx/.xlsm/.csv)",
+    type=["xlsx", "xlsm", "csv"],
     accept_multiple_files=False,
     label_visibility="collapsed",
 )
@@ -223,12 +276,14 @@ if run_clicked and invoice_files:
     with tempfile.TemporaryDirectory() as tmpdir:
         # Decide rate card for this run
         if rate_card_file:
-            rate_card_path = os.path.join(tmpdir, rate_card_file.name)
-            with open(rate_card_path, "wb") as out:
-                out.write(rate_card_file.read())
-            # Cache key is file path string, so new uploads load separately.
-            rates = get_rates(rate_card_path)
-            selected_rate_card_name = rate_card_file.name
+            try:
+                rate_card_path = normalize_uploaded_commercial_sheet(rate_card_file, tmpdir)
+                # Cache key is file path string, so new uploads load separately.
+                rates = get_rates(rate_card_path)
+                selected_rate_card_name = f"{rate_card_file.name} (Commercial upload)"
+            except Exception as e:
+                st.error(f"Could not read Step 3 file. Upload only the Commercial sheet in Excel/CSV format. Error: {e}")
+                st.stop()
         else:
             rates = default_rates
             selected_rate_card_name = os.path.basename(DEFAULT_RATES_FILE)
@@ -378,7 +433,7 @@ if run_clicked and invoice_files:
 with st.expander("ℹ️  How to update the rate card or add new products"):
     st.markdown("""
 **Rate card changed?** (Spaceship sends a new commercial rate sheet)
-1. Upload the latest rate card in **Step 3** (`.xlsx`)
+1. Upload only the updated **Commercial** sheet in **Step 3** (`.xlsx`, `.xlsm`, or `.csv`)
 2. Run reconciliation — no restart needed
 
 **New SKU launched?**

@@ -150,13 +150,10 @@ st.markdown("<p style='text-align:center; margin-bottom:1.5rem;'>Upload your mon
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PRELOAD RESOURCES
+# RESOURCE LOADING NOTE
 # ─────────────────────────────────────────────────────────────────────────────
-
-with st.spinner("Loading rate card and product weights (first time only)..."):
-    default_rates   = get_rates(DEFAULT_RATES_FILE)
-    product_weights = get_product_weights()
-
+# We intentionally do NOT preload heavy workbooks on page load.
+# Streamlit cloud can kill apps that do heavy startup work before UI renders.
 st.divider()
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -272,6 +269,14 @@ if run_clicked and invoice_files:
     progress_bar = st.progress(0, text="Loading invoice files...")
 
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Load shared resources only when the user runs reconciliation.
+        progress_bar.progress(10, text="Loading product weights...")
+        try:
+            product_weights = get_product_weights()
+        except Exception as e:
+            st.error(f"Could not load product weights from default workbook. Error: {e}")
+            st.stop()
+
         # Decide rate card for this run
         if rate_card_file:
             try:
@@ -283,8 +288,12 @@ if run_clicked and invoice_files:
                 st.error(f"Could not read Step 3 file. Upload only the Commercial sheet in Excel/CSV format. Error: {e}")
                 st.stop()
         else:
-            rates = default_rates
-            selected_rate_card_name = os.path.basename(DEFAULT_RATES_FILE)
+            try:
+                rates = get_rates(DEFAULT_RATES_FILE)
+                selected_rate_card_name = os.path.basename(DEFAULT_RATES_FILE)
+            except Exception as e:
+                st.error(f"Could not load default commercial sheet. Error: {e}")
+                st.stop()
 
         # Save invoice CSVs
         csv_paths = []

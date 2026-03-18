@@ -225,7 +225,7 @@ rate_card_file = st.file_uploader(
 if rate_card_file:
     st.success(f"✓ Updated rate card uploaded — {rate_card_file.name}")
 else:
-    st.info(f"Using default rate card: {os.path.basename(DEFAULT_RATES_FILE)}")
+    st.info(f"Using default commercial sheet from: {os.path.basename(DEFAULT_RATES_FILE)}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

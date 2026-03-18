@@ -658,11 +658,6 @@ def reconcile(df: pd.DataFrame, rates: dict, product_weights: dict) -> pd.DataFr
             if is_dup:
                 remarks = "Duplicate"
                 dupe += 1
-            elif fsc_pct is not None and fsc_pct < 30:
-                # Finance override:
-                # Any row with FSC share below 30% is treated as reconciled.
-                remarks = "Matched"
-                matched += 1
             elif abs(non_fuel_diff) <= TOLERANCE and abs(fuel_diff_val) <= TOLERANCE:
                 remarks = "Matched"
                 matched += 1
